@@ -2,6 +2,7 @@
  * Test-Case - Drop Targets
  *
  * Version 1.0 (01-12-2021)
+ * version 1.1 (24-08-2023)
  **/
 
 #include <Wire.h>
@@ -59,35 +60,6 @@ struct SwitchState {
     bool is_closed;
     SwitchCallback on_switch_close;
     SwitchCallback on_switch_open;
-};
-
-enum LedAnimationState {
-    Running = 0,
-    Pauzed = 1,
-    FadeIn = 2,
-    FadeOut = 3
-};
-
-enum LedAnimationType {
-    Static = 0,
-    Fade = 1
-};
-
-struct LedAnimationStep {
-    LedAnimationType type;
-    uint32_t duration;
-    uint16_t pwm_value;
-};
-
-struct LedAnimation {
-    LedAnimationStep* steps;
-    uint32_t last_update;
-    uint8_t current_step;
-    uint16_t current_pwm_value;
-    uint16_t backup_pwm_value;
-    uint8_t number_of_steps;
-    uint8_t pin;
-    LedAnimationState state;
 };
 
 struct Flipper {
@@ -453,201 +425,18 @@ void update_drop_targets() {
 }
 
 /** LEDs **/
-
-// Flipper button animation
-LedAnimationStep led_flipper_animation_sequence[4] = {
-    { LedAnimationType::Static, 500, LED_MAX_VALUE },
-    { LedAnimationType::Fade, 200, 0 },
-    { LedAnimationType::Static, 300, 0 },
-    { LedAnimationType::Fade, 200, LED_MAX_VALUE }
-};
-
-LedAnimation led_flipper_animation = {
-    led_flipper_animation_sequence,
-    0,
-    0,
-    0,
-    0,
-    4,
-    PIN_PCA9685_LED_BUTTON_FLIPPER,
-    LedAnimationState::Running
-};
-
-// Reset button animation (slow)
-LedAnimationStep led_reset_slow_animation_sequence[4] = {
-    { LedAnimationType::Static, 1000, LED_MAX_VALUE },
-    { LedAnimationType::Fade, 200, 0 },
-    { LedAnimationType::Static, 500, 0 },
-    { LedAnimationType::Fade, 200, LED_MAX_VALUE }
-};
-
-LedAnimation led_reset_slow_animation = {
-    led_reset_slow_animation_sequence,
-    0,
-    0,
-    0,
-    0,
-    4,
-    PIN_PCA9685_LED_BUTTON_RESET,
-    LedAnimationState::Pauzed
-};
-
-// Reset button animation (fast)
-LedAnimationStep led_reset_fast_animation_sequence[4] = {
-    { LedAnimationType::Static, 500, LED_MAX_VALUE },
-    { LedAnimationType::Fade, 200, 0 },
-    { LedAnimationType::Static, 250, 0 },
-    { LedAnimationType::Fade, 200, LED_MAX_VALUE }
-};
-
-LedAnimation led_reset_fast_animation = {
-    led_reset_fast_animation_sequence,
-    0,
-    0,
-    0,
-    0,
-    4,
-    PIN_PCA9685_LED_BUTTON_RESET,
-    LedAnimationState::Pauzed
-};
-
-// Trip button animation
-LedAnimationStep led_trip_animation_sequence[4] = {
-    { LedAnimationType::Static, 1000, LED_MAX_VALUE },
-    { LedAnimationType::Fade, 300, 0 },
-    { LedAnimationType::Static, 500, 0 },
-    { LedAnimationType::Fade, 300, LED_MAX_VALUE }
-};
-
-LedAnimation led_trip_animation = {
-    led_trip_animation_sequence,
-    0,
-    0,
-    0,
-    0,
-    4,
-    PIN_PCA9685_LED_BUTTON_TRIP,
-    LedAnimationState::Pauzed
-};
-
-#define LED_ANIMATION_NUMBER_OF 4
-LedAnimation animations[LED_ANIMATION_NUMBER_OF] = {
-    led_flipper_animation,
-    led_reset_slow_animation,
-    led_reset_fast_animation,
-    led_trip_animation
-};
-
-// Scratchpad pointers for loops iterating over animations and animation steps
-LedAnimation* animation = NULL;
-LedAnimationStep* step = NULL;
-
-// Warning: Hairy code ahead
-void update_leds() {
-    for (uint8_t i = 0; i < LED_ANIMATION_NUMBER_OF; i++) {
-        animation = &animations[i];
-
-        if (animation->state == LedAnimationState::Pauzed) {
-            // Animation is pauzed, don't do anything
-            continue;
-        }
-
-        if (animation->state == LedAnimationState::FadeOut) {
-            // Alternate flow, fading out is not part of the normal animation flow
-            if (millis() - animation->last_update > LED_FADE_SPEED_MS) {
-                // The fade out is done, set the current pwm value to 0
-                animation->current_pwm_value = 0;
-                pca9685.setPin(animation->pin, animation->current_pwm_value, true);
-                // Update animation state
-                animation->state = LedAnimationState::Pauzed;
-                continue;
-            }
-
-            // Compute intermediary value of the fade out
-            uint32_t time_in = millis() - animation->last_update;
-            animation->current_pwm_value = map(time_in, 0, LED_FADE_SPEED_MS, animation->backup_pwm_value, 0);
-            pca9685.setPin(animation->pin, animation->current_pwm_value, true);
-            continue;
-        }
-
-        if (animation->state == LedAnimationState::FadeIn) {
-            // Alternate flow, fading in is not part of the normal animation flow
-            step = &animation->steps[0];
-
-            if (millis() - animation->last_update > LED_FADE_SPEED_MS) {
-                // The fade in is done, set the current pwm value to the first step's pwm value
-                animation->current_pwm_value = step->pwm_value;
-                pca9685.setPin(animation->pin, animation->current_pwm_value, true);
-                // Update animation state. Let the animation resetart from the first step
-                animation->state = LedAnimationState::Running;
-                animation->last_update = millis();
-                animation->current_step = 0;
-                continue;
-            }
-
-            // Compute intermediary value of the fade in
-            uint32_t time_in = millis() - animation->last_update;
-            animation->current_pwm_value = map(time_in, 0, LED_FADE_SPEED_MS, 0, step->pwm_value);
-            pca9685.setPin(animation->pin, animation->current_pwm_value, true);
-            continue;
-        }
-
-        step = &animation->steps[animation->current_step];
-
-        if (step->type == LedAnimationType::Fade) {
-            // Compute intermediary value of the fade step
-            uint16_t previous_pwm_value = animation->steps[animation->current_step == 0 ? animation->number_of_steps - 1 : animation->current_step - 1].pwm_value;
-            uint32_t time_in = millis() - animation->last_update;
-            animation->current_pwm_value = map(time_in, 0, step->duration, previous_pwm_value, step->pwm_value);
-            pca9685.setPin(animation->pin, animation->current_pwm_value, true);
-        }
-
-        if (millis() - animation->last_update > step->duration) {
-            // Move on to the next animation step if the current step is done
-            animation->last_update = millis();
-            animation->current_step += 1;
-            if (animation->current_step == animation->number_of_steps) {
-                animation->current_step = 0;
-            }
-
-            step = &animation->steps[animation->current_step];
-            if (step->type == LedAnimationType::Static) {
-                // If the step is a static pwm value, set it
-                animation->current_pwm_value = step->pwm_value;
-                pca9685.setPin(animation->pin, step->pwm_value, true);
-            }
-        }
-    }
+void init_leds() {
+    pca9685.setPin(PIN_PCA9685_LED_BUTTON_FLIPPER, LED_MAX_VALUE, true);
+    pca9685.setPin(PIN_PCA9685_LED_BUTTON_RESET, LED_MAX_VALUE, true);
+    pca9685.setPin(PIN_PCA9685_LED_BUTTON_TRIP, LED_MAX_VALUE, true);
 }
 
-void stop_animation(uint8_t animation_index) {
-    animation = &animations[animation_index];
-
-    if (animation->state == LedAnimationState::Pauzed) {
-        // Don't do anything if the animation is already pauzed
-        return;
-    }
-
-    // Update animation state
-    animation->state = LedAnimationState::FadeOut;
-    animation->last_update = millis();
-    // Set the backup pwm field. This value is needed when computing the new current
-    // value while fading out. The pwm value of the current step can not be used as
-    // that step might not yet be completed.
-    animation->backup_pwm_value = animation->current_pwm_value;
+void visualize_reset(bool allowed) {
+    pca9685.setPin(PIN_PCA9685_LED_BUTTON_RESET, allowed ? LED_MAX_VALUE : 0, true);
 }
 
-void resume_animation(uint8_t animation_index) {
-    animation = &animations[animation_index];
-
-    if (animation->state == LedAnimationState::Running) {
-        // Don't do anything if the animation is already running
-        return;
-    }
-
-    // Update animation state
-    animation->state = LedAnimationState::FadeIn;
-    animation->last_update = millis();
+void visualize_trip(bool allowed) {
+    pca9685.setPin(PIN_PCA9685_LED_BUTTON_TRIP, allowed ? LED_MAX_VALUE : 0, true);
 }
 
 /** State **/
@@ -660,10 +449,7 @@ void update_state() {
         drop_targets[4].is_down
     ) {
         state_is_drop_target_reset_allowed = true;
-        stop_animation(1);
-        resume_animation(2);
         state_is_drop_target_trip_allowed = false;
-        stop_animation(3);
     }
     else if (
         !drop_targets[0].is_down &&
@@ -673,18 +459,15 @@ void update_state() {
         !drop_targets[4].is_down
     ) {
         state_is_drop_target_reset_allowed = false;
-        stop_animation(1);
-        stop_animation(2);
         state_is_drop_target_trip_allowed = true;
-        resume_animation(3);
     }
     else if (!state_is_drop_target_reset_in_progress) {
         state_is_drop_target_reset_allowed = true;
-        resume_animation(1);
-        stop_animation(2);
         state_is_drop_target_trip_allowed = true;
-        resume_animation(3);
     }
+
+    visualize_reset(state_is_drop_target_reset_allowed);
+    visualize_trip(state_is_drop_target_trip_allowed);
 };
 
 /** Serial **/
@@ -764,6 +547,12 @@ void setup() {
 
     // Initialize serial
     init_serial();
+
+    // Initialize LEDs
+    init_leds();
+
+    // Update state to set the initial button states.
+    update_state();
 }
 
 void loop() {
@@ -778,9 +567,6 @@ void loop() {
 
     // Update drop targets
     update_drop_targets();
-
-    // Update LEDs
-    update_leds();
 
     // Update serial
     update_serial();
